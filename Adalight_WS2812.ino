@@ -45,11 +45,11 @@ void setup() {
   FastLED.setMaxPowerInVoltsAndMilliamps(5, MAX_MILLIAMPS);
   
   // Initial RGB flash
-  FastLED.showColor(CRGB(255, 0, 0));
+  FastLED.showColor(CRGB(10, 0, 0));
   delay(500);
-  FastLED.showColor(CRGB(0, 255, 0));
+  FastLED.showColor(CRGB(0, 10, 0));
   delay(500);
-  FastLED.showColor(CRGB(0, 0, 255));
+  FastLED.showColor(CRGB(0, 0, 10));
   delay(500);
   FastLED.showColor(CRGB(0, 0, 0));
   
