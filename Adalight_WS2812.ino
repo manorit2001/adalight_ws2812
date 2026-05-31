@@ -17,6 +17,9 @@
 #define STANDBY_RED 8
 #define STANDBY_GREEN 0
 #define STANDBY_BLUE 0
+#define SUSTAINED_TARGET_MILLIAMPS 500
+#define HEAT_BUCKET_MAX 10000UL
+#define HEAT_STRESS_RANGE_MA (MAX_MILLIAMPS - SUSTAINED_TARGET_MILLIAMPS)
 
 // Baudrate, higher rate allows faster refresh rate and more LEDs (defined in /etc/boblight.conf)
 #define serialRate 500000
@@ -27,11 +30,18 @@ uint8_t prefix[] = {'A', 'd', 'a'}, hi, lo, chk, i;
 // Initialise LED-array
 CRGB leds[NUM_LEDS];
 unsigned long lastDataAt = 0;
+unsigned long lastFrameAt = 0;
+uint16_t lastFrameMilliAmps = 0;
+uint16_t heatBucket = 0;
 bool standbyShown = false;
 
 void showStandbyIfIdle() {
   if (!standbyShown && millis() - lastDataAt >= IDLE_TIMEOUT_MS) {
+    unsigned long now = millis();
+    updateHeatBucket(lastFrameMilliAmps, now - lastFrameAt);
     FastLED.showColor(CRGB(STANDBY_RED, STANDBY_GREEN, STANDBY_BLUE));
+    lastFrameAt = now;
+    lastFrameMilliAmps = estimateMilliAmps((uint32_t)NUM_LEDS * STANDBY_RED);
     standbyShown = true;
   }
 }
@@ -39,6 +49,62 @@ void showStandbyIfIdle() {
 void waitForSerialData() {
   while (!Serial.available()) {
     showStandbyIfIdle();
+  }
+}
+
+uint16_t estimateMilliAmps(uint32_t channelTotal) {
+  return (channelTotal * 20UL) / 255UL;
+}
+
+void updateHeatBucket(uint16_t estimatedMilliAmps, unsigned long elapsedMs) {
+  if (elapsedMs == 0) {
+    return;
+  }
+
+  if (estimatedMilliAmps > MAX_MILLIAMPS) {
+    estimatedMilliAmps = MAX_MILLIAMPS;
+  }
+
+  if (estimatedMilliAmps > SUSTAINED_TARGET_MILLIAMPS) {
+    uint16_t stress = estimatedMilliAmps - SUSTAINED_TARGET_MILLIAMPS;
+    uint32_t heatAdd = ((((uint32_t)stress * stress) / HEAT_STRESS_RANGE_MA) * elapsedMs) / HEAT_STRESS_RANGE_MA;
+
+    if (heatAdd > HEAT_BUCKET_MAX - heatBucket) {
+      heatBucket = HEAT_BUCKET_MAX;
+    } else {
+      heatBucket += heatAdd;
+    }
+  } else {
+    uint32_t heatDrop = ((uint32_t)(SUSTAINED_TARGET_MILLIAMPS - estimatedMilliAmps + 1) * elapsedMs) / SUSTAINED_TARGET_MILLIAMPS;
+
+    if (heatDrop > heatBucket) {
+      heatBucket = 0;
+    } else {
+      heatBucket -= heatDrop;
+    }
+  }
+}
+
+byte heatLimitedScale(uint16_t estimatedMilliAmps) {
+  if (estimatedMilliAmps <= SUSTAINED_TARGET_MILLIAMPS || heatBucket == 0) {
+    return 255;
+  }
+
+  uint16_t targetScale = ((uint32_t)SUSTAINED_TARGET_MILLIAMPS * 255UL) / estimatedMilliAmps;
+  uint16_t scaleDrop = ((uint32_t)heatBucket * (255 - targetScale)) / HEAT_BUCKET_MAX;
+
+  return 255 - scaleDrop;
+}
+
+void applyHeatLimit(byte scale) {
+  if (scale == 255) {
+    return;
+  }
+
+  for (uint8_t i = 0; i < NUM_LEDS; i++) {
+    leds[i].r = scale8(leds[i].r, scale);
+    leds[i].g = scale8(leds[i].g, scale);
+    leds[i].b = scale8(leds[i].b, scale);
   }
 }
 
@@ -74,6 +140,8 @@ void setup() {
   
   Serial.begin(serialRate);
   lastDataAt = millis();
+  lastFrameAt = lastDataAt;
+  lastFrameMilliAmps = 0;
   // Send "Magic Word" string to host
   Serial.print("Ada\n");
 }
@@ -104,6 +172,7 @@ void loop() {
   }
   
   memset(leds, 0, NUM_LEDS * sizeof(struct CRGB));
+  uint32_t channelTotal = 0;
   // Read the transmission data and set LED values
   for (uint8_t i = 0; i < NUM_LEDS; i++) {
     byte r, g, b;    
@@ -114,13 +183,22 @@ void loop() {
     waitForSerialData();
     b = Serial.read();
     limitSaturatedColor(r, g, b);
+    channelTotal += r;
+    channelTotal += g;
+    channelTotal += b;
     leds[i].r = r;
     leds[i].g = g;
     leds[i].b = b;
   }
   
   // Shows new values
+  unsigned long now = millis();
+  updateHeatBucket(lastFrameMilliAmps, now - lastFrameAt);
+  uint16_t estimatedMilliAmps = estimateMilliAmps(channelTotal);
+  applyHeatLimit(heatLimitedScale(estimatedMilliAmps));
   FastLED.show();
-  lastDataAt = millis();
+  lastFrameAt = now;
+  lastFrameMilliAmps = estimatedMilliAmps;
+  lastDataAt = now;
   standbyShown = false;
 }
