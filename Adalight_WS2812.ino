@@ -11,6 +11,8 @@
 #define NUM_LEDS 104
 #define DATA_PIN 6
 #define MAX_MILLIAMPS 1600
+#define SATURATION_DIM_START 40
+#define SATURATED_COLOR_SCALE 160
 
 // Baudrate, higher rate allows faster refresh rate and more LEDs (defined in /etc/boblight.conf)
 #define serialRate 500000
@@ -20,6 +22,22 @@ uint8_t prefix[] = {'A', 'd', 'a'}, hi, lo, chk, i;
 
 // Initialise LED-array
 CRGB leds[NUM_LEDS];
+
+void limitSaturatedColor(byte &r, byte &g, byte &b) {
+  byte maxChannel = max(r, max(g, b));
+  byte minChannel = min(r, min(g, b));
+  byte saturation = maxChannel - minChannel;
+
+  if (saturation <= SATURATION_DIM_START) {
+    return;
+  }
+
+  byte scale = 255 - ((uint16_t)(saturation - SATURATION_DIM_START) * (255 - SATURATED_COLOR_SCALE) / (255 - SATURATION_DIM_START));
+
+  r = scale8(r, scale);
+  g = scale8(g, scale);
+  b = scale8(b, scale);
+}
 
 void setup() {
   // Use NEOPIXEL to keep true colors
@@ -75,6 +93,7 @@ void loop() {
     g = Serial.read();
     while(!Serial.available());
     b = Serial.read();
+    limitSaturatedColor(r, g, b);
     leds[i].r = r;
     leds[i].g = g;
     leds[i].b = b;
