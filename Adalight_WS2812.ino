@@ -45,13 +45,13 @@ void setup() {
   FastLED.setMaxPowerInVoltsAndMilliamps(5, MAX_MILLIAMPS);
   
   // Initial RGB flash
-  LEDS.showColor(CRGB(255, 0, 0));
+  FastLED.showColor(CRGB(255, 0, 0));
   delay(500);
-  LEDS.showColor(CRGB(0, 255, 0));
+  FastLED.showColor(CRGB(0, 255, 0));
   delay(500);
-  LEDS.showColor(CRGB(0, 0, 255));
+  FastLED.showColor(CRGB(0, 0, 255));
   delay(500);
-  LEDS.showColor(CRGB(0, 0, 0));
+  FastLED.showColor(CRGB(0, 0, 0));
   
   Serial.begin(serialRate);
   // Send "Magic Word" string to host
