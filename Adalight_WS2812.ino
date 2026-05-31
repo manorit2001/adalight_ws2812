@@ -13,6 +13,10 @@
 #define MAX_MILLIAMPS 1600
 #define SATURATION_DIM_START 40
 #define SATURATED_COLOR_SCALE 160
+#define IDLE_TIMEOUT_MS 30000UL
+#define STANDBY_RED 8
+#define STANDBY_GREEN 0
+#define STANDBY_BLUE 0
 
 // Baudrate, higher rate allows faster refresh rate and more LEDs (defined in /etc/boblight.conf)
 #define serialRate 500000
@@ -22,6 +26,21 @@ uint8_t prefix[] = {'A', 'd', 'a'}, hi, lo, chk, i;
 
 // Initialise LED-array
 CRGB leds[NUM_LEDS];
+unsigned long lastDataAt = 0;
+bool standbyShown = false;
+
+void showStandbyIfIdle() {
+  if (!standbyShown && millis() - lastDataAt >= IDLE_TIMEOUT_MS) {
+    FastLED.showColor(CRGB(STANDBY_RED, STANDBY_GREEN, STANDBY_BLUE));
+    standbyShown = true;
+  }
+}
+
+void waitForSerialData() {
+  while (!Serial.available()) {
+    showStandbyIfIdle();
+  }
+}
 
 void limitSaturatedColor(byte &r, byte &g, byte &b) {
   byte maxChannel = max(r, max(g, b));
@@ -54,6 +73,7 @@ void setup() {
   FastLED.showColor(CRGB(0, 0, 0));
   
   Serial.begin(serialRate);
+  lastDataAt = millis();
   // Send "Magic Word" string to host
   Serial.print("Ada\n");
 }
@@ -61,7 +81,7 @@ void setup() {
 void loop() { 
   // Wait for first byte of Magic Word
   for(i = 0; i < sizeof prefix; ++i) {
-    waitLoop: while (!Serial.available()) ;;
+    waitLoop: waitForSerialData();
     // Check next byte in Magic Word
     if(prefix[i] == Serial.read()) continue;
     // otherwise, start over
@@ -70,11 +90,11 @@ void loop() {
   }
   
   // Hi, Lo, Checksum  
-  while (!Serial.available()) ;;
+  waitForSerialData();
   hi=Serial.read();
-  while (!Serial.available()) ;;
+  waitForSerialData();
   lo=Serial.read();
-  while (!Serial.available()) ;;
+  waitForSerialData();
   chk=Serial.read();
   
   // If checksum does not match go back to wait
@@ -87,11 +107,11 @@ void loop() {
   // Read the transmission data and set LED values
   for (uint8_t i = 0; i < NUM_LEDS; i++) {
     byte r, g, b;    
-    while(!Serial.available());
+    waitForSerialData();
     r = Serial.read();
-    while(!Serial.available());
+    waitForSerialData();
     g = Serial.read();
-    while(!Serial.available());
+    waitForSerialData();
     b = Serial.read();
     limitSaturatedColor(r, g, b);
     leds[i].r = r;
@@ -101,4 +121,6 @@ void loop() {
   
   // Shows new values
   FastLED.show();
+  lastDataAt = millis();
+  standbyShown = false;
 }
