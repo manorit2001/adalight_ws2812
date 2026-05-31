@@ -40,8 +40,7 @@ void showStandbyIfIdle() {
     unsigned long now = millis();
     updateHeatBucket(lastFrameMilliAmps, now - lastFrameAt);
     FastLED.showColor(CRGB(STANDBY_RED, STANDBY_GREEN, STANDBY_BLUE));
-    lastFrameAt = now;
-    lastFrameMilliAmps = estimateMilliAmps((uint32_t)NUM_LEDS * STANDBY_RED);
+    recordPowerState(now, estimateColorMilliAmps(STANDBY_RED, STANDBY_GREEN, STANDBY_BLUE));
     standbyShown = true;
   }
 }
@@ -54,6 +53,15 @@ void waitForSerialData() {
 
 uint16_t estimateMilliAmps(uint32_t channelTotal) {
   return (channelTotal * 20UL) / 255UL;
+}
+
+uint16_t estimateColorMilliAmps(byte r, byte g, byte b) {
+  return estimateMilliAmps((uint32_t)NUM_LEDS * (r + g + b));
+}
+
+void recordPowerState(unsigned long now, uint16_t displayedMilliAmps) {
+  lastFrameAt = now;
+  lastFrameMilliAmps = displayedMilliAmps;
 }
 
 void updateHeatBucket(uint16_t estimatedMilliAmps, unsigned long elapsedMs) {
@@ -202,8 +210,7 @@ void loop() {
   byte scale = heatLimitedScale(estimatedMilliAmps);
   applyHeatLimit(scale);
   FastLED.show();
-  lastFrameAt = now;
-  lastFrameMilliAmps = scaledMilliAmps(estimatedMilliAmps, scale);
+  recordPowerState(now, scaledMilliAmps(estimatedMilliAmps, scale));
   lastDataAt = now;
   standbyShown = false;
 }

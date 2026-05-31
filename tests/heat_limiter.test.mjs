@@ -1,12 +1,20 @@
 import assert from 'node:assert/strict';
 
+const NUM_LEDS = 104;
 const MAX_MILLIAMPS = 1600;
 const SUSTAINED_TARGET_MILLIAMPS = 500;
 const HEAT_BUCKET_MAX = 10000;
 const HEAT_STRESS_RANGE_MA = MAX_MILLIAMPS - SUSTAINED_TARGET_MILLIAMPS;
+const STANDBY_RED = 8;
+const STANDBY_GREEN = 0;
+const STANDBY_BLUE = 0;
 
 function estimateMilliAmps(channelTotal) {
   return Math.floor((channelTotal * 20) / 255);
+}
+
+function estimateColorMilliAmps(r, g, b) {
+  return estimateMilliAmps(NUM_LEDS * (r + g + b));
 }
 
 function updateHeatBucket(heatBucket, estimatedMilliAmps, elapsedMs) {
@@ -69,5 +77,13 @@ assert.equal(heatLimitedScale(heatBucket, 500), 255);
 heatBucket = HEAT_BUCKET_MAX;
 heatBucket = updateHeatBucket(heatBucket, 250, 1000);
 assert.equal(heatBucket, 9498);
+
+const standbyCurrent = estimateColorMilliAmps(STANDBY_RED, STANDBY_GREEN, STANDBY_BLUE);
+assert.equal(standbyCurrent, 65);
+heatBucket = HEAT_BUCKET_MAX;
+heatBucket = updateHeatBucket(heatBucket, standbyCurrent, 10000);
+assert.equal(heatBucket, 1280);
+heatBucket = updateHeatBucket(heatBucket, standbyCurrent, 2000);
+assert.equal(heatBucket, 0);
 
 console.log('heat limiter math ok');
