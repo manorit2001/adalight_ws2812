@@ -7,7 +7,8 @@
  * @date: 11/22/2015
  */
 #include "FastLED.h"
-#define NUM_LEDS 240
+
+#define NUM_LEDS 104
 #define DATA_PIN 6
 
 // Baudrate, higher rate allows faster refresh rate and more LEDs (defined in /etc/boblight.conf)
