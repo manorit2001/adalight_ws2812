@@ -10,6 +10,7 @@
 
 #define NUM_LEDS 104
 #define DATA_PIN 6
+#define MAX_MILLIAMPS 1600
 
 // Baudrate, higher rate allows faster refresh rate and more LEDs (defined in /etc/boblight.conf)
 #define serialRate 500000
@@ -23,6 +24,7 @@ CRGB leds[NUM_LEDS];
 void setup() {
   // Use NEOPIXEL to keep true colors
   FastLED.addLeds<NEOPIXEL, DATA_PIN>(leds, NUM_LEDS);
+  FastLED.setMaxPowerInVoltsAndMilliamps(5, MAX_MILLIAMPS);
   
   // Initial RGB flash
   LEDS.showColor(CRGB(255, 0, 0));
