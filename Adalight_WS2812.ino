@@ -12,7 +12,7 @@
 #define DATA_PIN 6
 
 // Baudrate, higher rate allows faster refresh rate and more LEDs (defined in /etc/boblight.conf)
-#define serialRate 115200
+#define serialRate 500000
 
 // Adalight sends a "Magic Word" (defined in /etc/boblight.conf) before sending the pixel data
 uint8_t prefix[] = {'A', 'd', 'a'}, hi, lo, chk, i;
