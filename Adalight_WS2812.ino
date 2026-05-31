@@ -96,6 +96,10 @@ byte heatLimitedScale(uint16_t estimatedMilliAmps) {
   return 255 - scaleDrop;
 }
 
+uint16_t scaledMilliAmps(uint16_t estimatedMilliAmps, byte scale) {
+  return ((uint32_t)estimatedMilliAmps * scale) / 255UL;
+}
+
 void applyHeatLimit(byte scale) {
   if (scale == 255) {
     return;
@@ -195,10 +199,11 @@ void loop() {
   unsigned long now = millis();
   updateHeatBucket(lastFrameMilliAmps, now - lastFrameAt);
   uint16_t estimatedMilliAmps = estimateMilliAmps(channelTotal);
-  applyHeatLimit(heatLimitedScale(estimatedMilliAmps));
+  byte scale = heatLimitedScale(estimatedMilliAmps);
+  applyHeatLimit(scale);
   FastLED.show();
   lastFrameAt = now;
-  lastFrameMilliAmps = estimatedMilliAmps;
+  lastFrameMilliAmps = scaledMilliAmps(estimatedMilliAmps, scale);
   lastDataAt = now;
   standbyShown = false;
 }

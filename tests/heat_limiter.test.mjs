@@ -39,6 +39,10 @@ function heatLimitedScale(heatBucket, estimatedMilliAmps) {
   return 255 - scaleDrop;
 }
 
+function scaledMilliAmps(estimatedMilliAmps, scale) {
+  return Math.floor((estimatedMilliAmps * scale) / 255);
+}
+
 assert.equal(estimateMilliAmps(255), 20);
 assert.equal(estimateMilliAmps(255 * 3 * 104), 6240);
 
@@ -46,6 +50,11 @@ let heatBucket = 0;
 heatBucket = updateHeatBucket(heatBucket, 1600, 10000);
 assert.equal(heatBucket, HEAT_BUCKET_MAX);
 assert.equal(heatLimitedScale(heatBucket, 1600), 79);
+
+const displayedMilliAmps = scaledMilliAmps(1600, heatLimitedScale(heatBucket, 1600));
+assert.equal(displayedMilliAmps, 495);
+heatBucket = updateHeatBucket(heatBucket, displayedMilliAmps, 1000);
+assert.equal(heatBucket, 9988);
 
 heatBucket = 0;
 heatBucket = updateHeatBucket(heatBucket, 1000, 10000);
