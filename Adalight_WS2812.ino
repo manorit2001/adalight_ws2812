@@ -20,6 +20,16 @@
 #define SUSTAINED_TARGET_MILLIAMPS 500
 #define HEAT_BUCKET_MAX 10000UL
 #define HEAT_STRESS_RANGE_MA (MAX_MILLIAMPS - SUSTAINED_TARGET_MILLIAMPS)
+#define RED_COMPENSATION_BUDGET_DIVISOR 4
+#define RED_COMPENSATION_MAX_PER_LED 16
+
+enum LedRegion : uint8_t {
+  LED_REGION_BOTTOM = 0,
+  LED_REGION_SIDE = 1,
+  LED_REGION_TOP = 2,
+  LED_REGION_INACTIVE = 255,
+  LED_REGION_COUNT = 3,
+};
 
 // Baudrate, higher rate allows faster refresh rate and more LEDs (defined in /etc/boblight.conf)
 #define serialRate 500000
@@ -35,12 +45,98 @@ uint16_t lastFrameMilliAmps = 0;
 uint16_t heatBucket = 0;
 bool standbyShown = false;
 
+bool isBottomLed(uint8_t ledIndex) {
+  return ledIndex <= 14 || (ledIndex >= 89 && ledIndex <= 103);
+}
+
+bool isSideLed(uint8_t ledIndex) {
+  return (ledIndex >= 15 && ledIndex <= 31) || (ledIndex >= 72 && ledIndex <= 88);
+}
+
+bool isTopLed(uint8_t ledIndex) {
+  return ledIndex >= 32 && ledIndex <= 71;
+}
+
+bool isActiveLed(uint8_t ledIndex) {
+  if (isTopLed(ledIndex)) {
+    return true;
+  }
+
+  if (ledIndex >= 15 && ledIndex <= 31) {
+    return ((ledIndex - 15) % 2) == 0;
+  }
+
+  if (ledIndex >= 72 && ledIndex <= 88) {
+    return ((ledIndex - 72) % 2) == 0;
+  }
+
+  if (ledIndex <= 14) {
+    return ((ledIndex - 0) % 4) == 0;
+  }
+
+  if (ledIndex >= 89 && ledIndex <= 103) {
+    return ((ledIndex - 89) % 4) == 0;
+  }
+
+  return false;
+}
+
+uint8_t ledRegion(uint8_t ledIndex) {
+  if (isTopLed(ledIndex)) {
+    return LED_REGION_TOP;
+  }
+
+  if (isSideLed(ledIndex)) {
+    return LED_REGION_SIDE;
+  }
+
+  if (isBottomLed(ledIndex)) {
+    return LED_REGION_BOTTOM;
+  }
+
+  return LED_REGION_INACTIVE;
+}
+
+uint8_t activeLedCount() {
+  uint8_t count = 0;
+
+  for (uint8_t ledIndex = 0; ledIndex < NUM_LEDS; ledIndex++) {
+    if (isActiveLed(ledIndex)) {
+      count++;
+    }
+  }
+
+  return count;
+}
+
+uint8_t regionActiveLedCount(uint8_t region) {
+  uint8_t count = 0;
+
+  for (uint8_t ledIndex = 0; ledIndex < NUM_LEDS; ledIndex++) {
+    if (ledRegion(ledIndex) == region && isActiveLed(ledIndex)) {
+      count++;
+    }
+  }
+
+  return count;
+}
+
 void showStandbyIfIdle() {
   if (!standbyShown && millis() - lastDataAt >= IDLE_TIMEOUT_MS) {
     unsigned long now = millis();
     updateHeatBucket(lastFrameMilliAmps, now - lastFrameAt);
-    FastLED.showColor(CRGB(STANDBY_RED, STANDBY_GREEN, STANDBY_BLUE));
-    recordPowerState(now, estimateColorMilliAmps(STANDBY_RED, STANDBY_GREEN, STANDBY_BLUE));
+    memset(leds, 0, NUM_LEDS * sizeof(struct CRGB));
+
+    for (uint8_t i = 0; i < NUM_LEDS; i++) {
+      if (!isActiveLed(i)) {
+        continue;
+      }
+
+      leds[i] = CRGB(STANDBY_RED, STANDBY_GREEN, STANDBY_BLUE);
+    }
+
+    FastLED.show();
+    recordPowerState(now, estimateActiveColorMilliAmps(STANDBY_RED, STANDBY_GREEN, STANDBY_BLUE));
     standbyShown = true;
   }
 }
@@ -55,8 +151,12 @@ uint16_t estimateMilliAmps(uint32_t channelTotal) {
   return (channelTotal * 20UL) / 255UL;
 }
 
-uint16_t estimateColorMilliAmps(byte r, byte g, byte b) {
-  return estimateMilliAmps((uint32_t)NUM_LEDS * (r + g + b));
+uint16_t estimateColorMilliAmps(uint8_t ledCount, byte r, byte g, byte b) {
+  return estimateMilliAmps((uint32_t)ledCount * (r + g + b));
+}
+
+uint16_t estimateActiveColorMilliAmps(byte r, byte g, byte b) {
+  return estimateColorMilliAmps(activeLedCount(), r, g, b);
 }
 
 void recordPowerState(unsigned long now, uint16_t displayedMilliAmps) {
@@ -108,16 +208,145 @@ uint16_t scaledMilliAmps(uint16_t estimatedMilliAmps, byte scale) {
   return ((uint32_t)estimatedMilliAmps * scale) / 255UL;
 }
 
-void applyHeatLimit(byte scale) {
-  if (scale == 255) {
-    return;
+uint16_t effectiveBudgetMilliAmps(uint16_t estimatedMilliAmps, byte heatScale, byte scale) {
+  if (scale < heatScale) {
+    return MAX_MILLIAMPS;
   }
 
-  for (uint8_t i = 0; i < NUM_LEDS; i++) {
-    leds[i].r = scale8(leds[i].r, scale);
-    leds[i].g = scale8(leds[i].g, scale);
-    leds[i].b = scale8(leds[i].b, scale);
+  return min(MAX_MILLIAMPS, scaledMilliAmps(estimatedMilliAmps, scale));
+}
+
+byte currentLimitedScale(uint16_t estimatedMilliAmps, byte heatScale) {
+  if (estimatedMilliAmps <= MAX_MILLIAMPS) {
+    return heatScale;
   }
+
+  uint16_t maxScale = ((uint32_t)MAX_MILLIAMPS * 255UL) / estimatedMilliAmps;
+
+  if (maxScale > 255) {
+    maxScale = 255;
+  }
+
+  return min(heatScale, (byte)maxScale);
+}
+
+uint32_t milliAmpsToChannelBudget(uint16_t milliAmps) {
+  return ((uint32_t)milliAmps * 255UL) / 20UL;
+}
+
+uint16_t addRedHeadroom(uint8_t ledIndex, uint16_t headroom) {
+  uint16_t add = min((uint16_t)(255 - leds[ledIndex].r), headroom);
+
+  leds[ledIndex].r += add;
+  return add;
+}
+
+byte regionScaleFor(uint32_t requestedChannelTotal, uint32_t retainedChannelTotal) {
+  if (requestedChannelTotal == 0 || retainedChannelTotal == 0) {
+    return 0;
+  }
+
+  if (retainedChannelTotal >= requestedChannelTotal) {
+    return 255;
+  }
+
+  uint32_t scale = (retainedChannelTotal * 255UL) / requestedChannelTotal;
+
+  if (scale > 255UL) {
+    scale = 255UL;
+  }
+
+  return (byte)scale;
+}
+
+uint32_t applyPowerLimit(uint16_t budgetMilliAmps, bool compensateRed) {
+  uint32_t requestedChannelTotals[LED_REGION_COUNT] = {0, 0, 0};
+  uint32_t retainedChannelTotals[LED_REGION_COUNT] = {0, 0, 0};
+  byte regionScales[LED_REGION_COUNT] = {0, 0, 0};
+  uint32_t budgetChannelTotal = milliAmpsToChannelBudget(budgetMilliAmps);
+
+  for (uint8_t ledIndex = 0; ledIndex < NUM_LEDS; ledIndex++) {
+    if (!isActiveLed(ledIndex)) {
+      continue;
+    }
+
+    uint8_t region = ledRegion(ledIndex);
+
+    requestedChannelTotals[region] += leds[ledIndex].r;
+    requestedChannelTotals[region] += leds[ledIndex].g;
+    requestedChannelTotals[region] += leds[ledIndex].b;
+  }
+
+  retainedChannelTotals[LED_REGION_TOP] = min(requestedChannelTotals[LED_REGION_TOP], budgetChannelTotal);
+  budgetChannelTotal -= retainedChannelTotals[LED_REGION_TOP];
+  retainedChannelTotals[LED_REGION_SIDE] = min(requestedChannelTotals[LED_REGION_SIDE], budgetChannelTotal);
+  budgetChannelTotal -= retainedChannelTotals[LED_REGION_SIDE];
+  retainedChannelTotals[LED_REGION_BOTTOM] = min(requestedChannelTotals[LED_REGION_BOTTOM], budgetChannelTotal);
+
+  for (uint8_t region = 0; region < LED_REGION_COUNT; region++) {
+    regionScales[region] = regionScaleFor(requestedChannelTotals[region], retainedChannelTotals[region]);
+  }
+
+  uint32_t displayedChannelTotal = 0;
+
+  for (uint8_t ledIndex = 0; ledIndex < NUM_LEDS; ledIndex++) {
+    if (!isActiveLed(ledIndex)) {
+      continue;
+    }
+
+    uint8_t region = ledRegion(ledIndex);
+
+    byte scale = regionScales[region];
+
+    if (scale < 255) {
+      leds[ledIndex].r = scale8(leds[ledIndex].r, scale);
+      leds[ledIndex].g = scale8(leds[ledIndex].g, scale);
+      leds[ledIndex].b = scale8(leds[ledIndex].b, scale);
+    }
+
+    displayedChannelTotal += leds[ledIndex].r;
+    displayedChannelTotal += leds[ledIndex].g;
+    displayedChannelTotal += leds[ledIndex].b;
+  }
+
+  if (!compensateRed) {
+    return displayedChannelTotal;
+  }
+
+  uint32_t displayedBudgetChannelTotal = milliAmpsToChannelBudget(budgetMilliAmps);
+  uint32_t remainingBudget = 0;
+
+  if (displayedBudgetChannelTotal > displayedChannelTotal) {
+    remainingBudget = displayedBudgetChannelTotal - displayedChannelTotal;
+  }
+
+  uint32_t boostBudget = remainingBudget / RED_COMPENSATION_BUDGET_DIVISOR;
+
+  if (boostBudget == 0) {
+    return displayedChannelTotal;
+  }
+
+  uint16_t perLedBoost = boostBudget / activeLedCount();
+
+  if (perLedBoost == 0) {
+    perLedBoost = 1;
+  } else if (perLedBoost > RED_COMPENSATION_MAX_PER_LED) {
+    perLedBoost = RED_COMPENSATION_MAX_PER_LED;
+  }
+
+  for (int8_t region = LED_REGION_TOP; region >= LED_REGION_BOTTOM && boostBudget > 0; region--) {
+    for (uint8_t ledIndex = 0; ledIndex < NUM_LEDS && boostBudget > 0; ledIndex++) {
+      if (ledRegion(ledIndex) != (uint8_t)region || !isActiveLed(ledIndex)) {
+        continue;
+      }
+
+      uint16_t added = addRedHeadroom(ledIndex, min((uint32_t)perLedBoost, boostBudget));
+      displayedChannelTotal += added;
+      boostBudget -= added;
+    }
+  }
+
+  return displayedChannelTotal;
 }
 
 void limitSaturatedColor(byte &r, byte &g, byte &b) {
@@ -199,6 +428,11 @@ void loop() {
     waitForSerialData();
     b = Serial.read();
     limitSaturatedColor(r, g, b);
+
+    if (!isActiveLed(i)) {
+      continue;
+    }
+
     channelTotal += r;
     channelTotal += g;
     channelTotal += b;
@@ -211,10 +445,12 @@ void loop() {
   unsigned long now = millis();
   updateHeatBucket(lastFrameMilliAmps, now - lastFrameAt);
   uint16_t estimatedMilliAmps = estimateMilliAmps(channelTotal);
-  byte scale = heatLimitedScale(estimatedMilliAmps);
-  applyHeatLimit(scale);
+  byte heatScale = heatLimitedScale(estimatedMilliAmps);
+  byte scale = currentLimitedScale(estimatedMilliAmps, heatScale);
+  uint16_t budgetMilliAmps = effectiveBudgetMilliAmps(estimatedMilliAmps, heatScale, scale);
+  uint32_t displayedChannelTotal = applyPowerLimit(budgetMilliAmps, scale < 255);
   FastLED.show();
-  recordPowerState(now, scaledMilliAmps(estimatedMilliAmps, scale));
+  recordPowerState(now, estimateMilliAmps(displayedChannelTotal));
   lastDataAt = now;
   standbyShown = false;
 }
