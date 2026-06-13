@@ -12,7 +12,7 @@
 #define DATA_PIN 6
 #define MAX_MILLIAMPS 1600
 #define SATURATION_DIM_START 40
-#define SATURATED_COLOR_SCALE 160
+#define SATURATED_COLOR_SCALE 255
 #define IDLE_TIMEOUT_MS 60000UL
 #define STANDBY_RED 8
 #define STANDBY_GREEN 0
@@ -121,6 +121,10 @@ void applyHeatLimit(byte scale) {
 }
 
 void limitSaturatedColor(byte &r, byte &g, byte &b) {
+  if (SATURATED_COLOR_SCALE == 255) {
+    return;
+  }
+
   byte maxChannel = max(r, max(g, b));
   byte minChannel = min(r, min(g, b));
   byte saturation = maxChannel - minChannel;

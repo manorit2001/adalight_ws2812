@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 const NUM_LEDS = 104;
 const MAX_MILLIAMPS = 1600;
 const SUSTAINED_TARGET_MILLIAMPS = 500;
+const SATURATION_DIM_START = 40;
+const SATURATED_COLOR_SCALE = 255;
 const HEAT_BUCKET_MAX = 10000;
 const HEAT_STRESS_RANGE_MA = MAX_MILLIAMPS - SUSTAINED_TARGET_MILLIAMPS;
 const STANDBY_RED = 8;
@@ -51,8 +53,36 @@ function scaledMilliAmps(estimatedMilliAmps, scale) {
   return Math.floor((estimatedMilliAmps * scale) / 255);
 }
 
+function scale8(value, scale) {
+  return Math.floor((value * scale) / 256);
+}
+
+function limitSaturatedColor(r, g, b) {
+  if (SATURATED_COLOR_SCALE === 255) {
+    return { r, g, b };
+  }
+
+  const maxChannel = Math.max(r, g, b);
+  const minChannel = Math.min(r, g, b);
+  const saturation = maxChannel - minChannel;
+
+  if (saturation <= SATURATION_DIM_START) {
+    return { r, g, b };
+  }
+
+  const scale = 255 - Math.floor(((saturation - SATURATION_DIM_START) * (255 - SATURATED_COLOR_SCALE)) / (255 - SATURATION_DIM_START));
+
+  return {
+    r: scale8(r, scale),
+    g: scale8(g, scale),
+    b: scale8(b, scale),
+  };
+}
+
 assert.equal(estimateMilliAmps(255), 20);
 assert.equal(estimateMilliAmps(255 * 3 * 104), 6240);
+assert.deepEqual(limitSaturatedColor(255, 0, 0), { r: 255, g: 0, b: 0 });
+assert.deepEqual(limitSaturatedColor(0, 255, 255), { r: 0, g: 255, b: 255 });
 
 let heatBucket = 0;
 heatBucket = updateHeatBucket(heatBucket, 1600, 10000);
