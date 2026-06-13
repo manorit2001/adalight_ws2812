@@ -16,8 +16,10 @@ const STANDBY_BLUE = 0;
 const LED_REGION_BOTTOM = 0;
 const LED_REGION_SIDE = 1;
 const LED_REGION_TOP = 2;
+const LED_REGION_CORNER = 3;
 const LED_REGION_INACTIVE = 255;
-const LED_REGION_COUNT = 3;
+const LED_REGION_COUNT = 4;
+const REGION_WEIGHTS = [2, 7, 36, 1];
 
 function estimateMilliAmps(channelTotal) {
   return Math.floor((channelTotal * 20) / 255);
@@ -125,6 +127,10 @@ function isTopLed(index) {
   return index >= 32 && index <= 71;
 }
 
+function isCornerLed(index) {
+  return [12, 15, 31, 32, 71, 72, 88, 89].includes(index);
+}
+
 function isActiveLed(index) {
   if (isTopLed(index)) {
     return true;
@@ -150,6 +156,10 @@ function isActiveLed(index) {
 }
 
 function ledRegion(index) {
+  if (isCornerLed(index)) {
+    return LED_REGION_CORNER;
+  }
+
   if (isTopLed(index)) {
     return LED_REGION_TOP;
   }
@@ -230,7 +240,7 @@ function sumChannels(leds) {
 }
 
 function regionChannelTotals(leds) {
-  const totals = [0, 0, 0];
+  const totals = [0, 0, 0, 0];
 
   for (let index = 0; index < leds.length; index += 1) {
     const region = ledRegion(index);
@@ -259,28 +269,94 @@ function regionScaleFor(requestedChannelTotal, retainedChannelTotal) {
   return Math.min(scale, 255);
 }
 
-function applyPowerLimit(leds, budgetMilliAmps, compensateRed = budgetMilliAmps < MAX_MILLIAMPS) {
-  const requestedChannelTotals = [0, 0, 0];
-  const retainedChannelTotals = [0, 0, 0];
-  const regionScales = [0, 0, 0];
-  const budgetChannelTotal = milliAmpsToChannelBudget(budgetMilliAmps);
+function allocateWeightedRegionBudget(requestedChannelTotals, budgetChannelTotal) {
+  const retainedChannelTotals = [0, 0, 0, 0];
+  const settledRegions = [false, false, false, false];
   let remainingBudget = budgetChannelTotal;
+
+  while (remainingBudget > 0) {
+    let weightedDemand = 0;
+    let hasDemand = false;
+
+    for (let region = 0; region < LED_REGION_COUNT; region += 1) {
+      if (settledRegions[region] || retainedChannelTotals[region] >= requestedChannelTotals[region]) {
+        continue;
+      }
+
+      weightedDemand += requestedChannelTotals[region] * REGION_WEIGHTS[region];
+      hasDemand = true;
+    }
+
+    if (!hasDemand || weightedDemand === 0) {
+      return retainedChannelTotals;
+    }
+
+    const shares = [0, 0, 0, 0];
+    let allocatedThisPass = 0;
+    let settledThisPass = false;
+
+    for (let region = 0; region < LED_REGION_COUNT; region += 1) {
+      if (settledRegions[region] || retainedChannelTotals[region] >= requestedChannelTotals[region]) {
+        continue;
+      }
+
+      const weightedRequest = requestedChannelTotals[region] * REGION_WEIGHTS[region];
+      const share = Math.floor((remainingBudget * weightedRequest) / weightedDemand);
+
+      if (share >= requestedChannelTotals[region]) {
+        retainedChannelTotals[region] = requestedChannelTotals[region];
+        remainingBudget -= requestedChannelTotals[region];
+        settledRegions[region] = true;
+        settledThisPass = true;
+      } else {
+        shares[region] = share;
+        allocatedThisPass += share;
+      }
+    }
+
+    if (settledThisPass) {
+      continue;
+    }
+
+    for (let region = 0; region < LED_REGION_COUNT; region += 1) {
+      retainedChannelTotals[region] += shares[region];
+    }
+
+    remainingBudget = Math.max(0, remainingBudget - allocatedThisPass);
+
+    for (const region of [LED_REGION_TOP, LED_REGION_SIDE, LED_REGION_BOTTOM, LED_REGION_CORNER]) {
+      if (remainingBudget === 0) {
+        break;
+      }
+
+      if (retainedChannelTotals[region] < requestedChannelTotals[region]) {
+        retainedChannelTotals[region] += 1;
+        remainingBudget -= 1;
+      }
+    }
+
+    return retainedChannelTotals;
+  }
+
+  return retainedChannelTotals;
+}
+
+function applyPowerLimit(leds, budgetMilliAmps, compensateRed = budgetMilliAmps < MAX_MILLIAMPS) {
+  const requestedChannelTotals = [0, 0, 0, 0];
+  const regionScales = [0, 0, 0, 0];
+  const budgetChannelTotal = milliAmpsToChannelBudget(budgetMilliAmps);
 
   for (let index = 0; index < leds.length; index += 1) {
     const region = ledRegion(index);
 
-    if (region === LED_REGION_INACTIVE) {
+    if (region === LED_REGION_INACTIVE || !isActiveLed(index)) {
       continue;
     }
 
     requestedChannelTotals[region] += leds[index].r + leds[index].g + leds[index].b;
   }
 
-  retainedChannelTotals[LED_REGION_TOP] = Math.min(requestedChannelTotals[LED_REGION_TOP], remainingBudget);
-  remainingBudget -= retainedChannelTotals[LED_REGION_TOP];
-  retainedChannelTotals[LED_REGION_SIDE] = Math.min(requestedChannelTotals[LED_REGION_SIDE], remainingBudget);
-  remainingBudget -= retainedChannelTotals[LED_REGION_SIDE];
-  retainedChannelTotals[LED_REGION_BOTTOM] = Math.min(requestedChannelTotals[LED_REGION_BOTTOM], remainingBudget);
+  const retainedChannelTotals = allocateWeightedRegionBudget(requestedChannelTotals, budgetChannelTotal);
 
   for (let region = 0; region < LED_REGION_COUNT; region += 1) {
     regionScales[region] = regionScaleFor(requestedChannelTotals[region], retainedChannelTotals[region]);
@@ -289,7 +365,7 @@ function applyPowerLimit(leds, budgetMilliAmps, compensateRed = budgetMilliAmps 
   const displayed = leds.map((led, index) => {
     const region = ledRegion(index);
 
-    if (region === LED_REGION_INACTIVE) {
+    if (region === LED_REGION_INACTIVE || !isActiveLed(index)) {
       return { r: 0, g: 0, b: 0 };
     }
 
@@ -351,10 +427,17 @@ assert.deepEqual(limitSaturatedColor(255, 0, 0), { r: 255, g: 0, b: 0 });
 assert.deepEqual(limitSaturatedColor(0, 255, 255), { r: 0, g: 255, b: 255 });
 
 assert.equal(activeLedCount(), 66);
-assert.equal(regionActiveLedCount(LED_REGION_TOP), 40);
-assert.equal(regionActiveLedCount(LED_REGION_SIDE), 18);
-assert.equal(regionActiveLedCount(LED_REGION_BOTTOM), 8);
-assert.equal(regionActiveLedCount(LED_REGION_TOP) + regionActiveLedCount(LED_REGION_SIDE) + regionActiveLedCount(LED_REGION_BOTTOM), activeLedCount());
+assert.equal(regionActiveLedCount(LED_REGION_TOP), 38);
+assert.equal(regionActiveLedCount(LED_REGION_SIDE), 14);
+assert.equal(regionActiveLedCount(LED_REGION_BOTTOM), 6);
+assert.equal(regionActiveLedCount(LED_REGION_CORNER), 8);
+assert.equal(
+  regionActiveLedCount(LED_REGION_TOP) +
+    regionActiveLedCount(LED_REGION_SIDE) +
+    regionActiveLedCount(LED_REGION_BOTTOM) +
+    regionActiveLedCount(LED_REGION_CORNER),
+  activeLedCount(),
+);
 
 assert(isActiveLed(0));
 assert(isActiveLed(4));
@@ -424,20 +507,24 @@ const fullWhiteTotals = regionChannelTotals(fullWhiteLimited.leds);
 assert.equal(fullWhiteCurrent, 3960);
 assert.equal(fullWhiteScale, 103);
 assert.equal(fullWhiteBudget, MAX_MILLIAMPS);
-assert.equal(fullWhiteTotals[LED_REGION_BOTTOM], 0);
-assert.equal(fullWhiteTotals[LED_REGION_SIDE], 0);
-assert(fullWhiteTotals[LED_REGION_TOP] > 0);
+assert(fullWhiteTotals[LED_REGION_TOP] > fullWhiteTotals[LED_REGION_SIDE]);
+assert(fullWhiteTotals[LED_REGION_SIDE] > fullWhiteTotals[LED_REGION_BOTTOM]);
+assert(fullWhiteTotals[LED_REGION_BOTTOM] > fullWhiteTotals[LED_REGION_CORNER]);
+assert(fullWhiteTotals[LED_REGION_CORNER] > 0);
 assert.equal(estimateMilliAmps(fullWhiteLimited.channelTotal) <= MAX_MILLIAMPS, true);
-assert(fullWhiteLimited.leds.filter((_, index) => isTopLed(index)).every((led) => led.r === led.g && led.g === led.b));
-assert(fullWhiteLimited.leds.filter((_, index) => isTopLed(index)).every((led) => led.r >= 160 && led.r <= 175));
+assert(fullWhiteLimited.leds.filter((_, index) => ledRegion(index) === LED_REGION_TOP && isActiveLed(index)).every((led) => led.r === led.g && led.g === led.b));
+assert(fullWhiteLimited.leds.filter((_, index) => ledRegion(index) === LED_REGION_TOP && isActiveLed(index)).every((led) => led.r >= 155 && led.r <= 175));
+assert(fullWhiteLimited.leds.filter((_, index) => ledRegion(index) === LED_REGION_SIDE && isActiveLed(index)).every((led) => led.r >= 25 && led.r <= 40));
+assert(fullWhiteLimited.leds.filter((_, index) => ledRegion(index) === LED_REGION_BOTTOM && isActiveLed(index)).every((led) => led.r >= 5 && led.r <= 12));
+assert(fullWhiteLimited.leds.filter((_, index) => ledRegion(index) === LED_REGION_CORNER && isActiveLed(index)).every((led) => led.r >= 2 && led.r <= 6));
 assert(fullWhiteLimited.leds.filter((_, index) => !isActiveLed(index)).every((led) => led.r === 0 && led.g === 0 && led.b === 0));
 
 const topOnlyFrame = createRegionFrame({ r: 0, g: 0, b: 0 }, { r: 0, g: 0, b: 0 }, { r: 255, g: 255, b: 255 });
 const topOnlyCurrent = estimateMilliAmps(applyRegionMask(topOnlyFrame).channelTotal);
 const coolTopOnly = applyPowerLimit(topOnlyFrame, MAX_MILLIAMPS, false);
-const coolTopLed = coolTopOnly.leds.find((_, index) => isTopLed(index));
-assert.equal(topOnlyCurrent, 2400);
-assert(coolTopLed.r >= 160 && coolTopLed.r <= 175);
+const coolTopLed = coolTopOnly.leds.find((_, index) => ledRegion(index) === LED_REGION_TOP);
+assert.equal(topOnlyCurrent, 2280);
+assert(coolTopLed.r >= 175 && coolTopLed.r <= 185);
 assert.equal(coolTopLed.r, coolTopLed.g);
 assert.equal(coolTopLed.g, coolTopLed.b);
 
@@ -445,26 +532,29 @@ const hotTopHeatScale = heatLimitedScale(HEAT_BUCKET_MAX, topOnlyCurrent);
 const hotTopScale = currentLimitedScale(topOnlyCurrent, hotTopHeatScale);
 const hotTopBudget = effectiveBudgetMilliAmps(topOnlyCurrent, hotTopHeatScale, hotTopScale);
 const hotTopOnly = applyPowerLimit(topOnlyFrame, hotTopBudget, false);
-const hotTopLed = hotTopOnly.leds.find((_, index) => isTopLed(index));
+const hotTopLed = hotTopOnly.leds.find((_, index) => ledRegion(index) === LED_REGION_TOP);
 const hotTopTotals = regionChannelTotals(hotTopOnly.leds);
 assert(hotTopBudget < MAX_MILLIAMPS);
 assert(estimateMilliAmps(hotTopOnly.channelTotal) <= hotTopBudget);
 assert(hotTopLed.r < coolTopLed.r);
 assert.equal(hotTopTotals[LED_REGION_SIDE], 0);
 assert.equal(hotTopTotals[LED_REGION_BOTTOM], 0);
+assert.equal(hotTopTotals[LED_REGION_CORNER], 0);
 
 const squeezedWhite = applyPowerLimit(maskedWhiteFrame.leds, 1500, false);
 const squeezedWhiteTotals = regionChannelTotals(squeezedWhite.leds);
-assert.equal(squeezedWhiteTotals[LED_REGION_BOTTOM], 0);
-assert.equal(squeezedWhiteTotals[LED_REGION_SIDE], 0);
-assert(squeezedWhiteTotals[LED_REGION_TOP] > 0);
+assert(squeezedWhiteTotals[LED_REGION_TOP] > squeezedWhiteTotals[LED_REGION_SIDE]);
+assert(squeezedWhiteTotals[LED_REGION_SIDE] > squeezedWhiteTotals[LED_REGION_BOTTOM]);
+assert(squeezedWhiteTotals[LED_REGION_BOTTOM] > squeezedWhiteTotals[LED_REGION_CORNER]);
+assert(squeezedWhiteTotals[LED_REGION_CORNER] > 0);
 assert(estimateMilliAmps(squeezedWhite.channelTotal) <= 1500);
 
 const mixedWhite = applyPowerLimit(maskedWhiteFrame.leds, 3000, false);
 const mixedWhiteTotals = regionChannelTotals(mixedWhite.leds);
-assert.equal(mixedWhiteTotals[LED_REGION_BOTTOM], 0);
-assert(mixedWhiteTotals[LED_REGION_SIDE] > 0);
-assert.equal(mixedWhiteTotals[LED_REGION_TOP], regionChannelTotals(topOnlyFrame)[LED_REGION_TOP]);
+assert(mixedWhiteTotals[LED_REGION_TOP] > mixedWhiteTotals[LED_REGION_SIDE]);
+assert(mixedWhiteTotals[LED_REGION_SIDE] > mixedWhiteTotals[LED_REGION_BOTTOM]);
+assert(mixedWhiteTotals[LED_REGION_BOTTOM] > mixedWhiteTotals[LED_REGION_CORNER]);
+assert(mixedWhiteTotals[LED_REGION_CORNER] > 0);
 assert(estimateMilliAmps(mixedWhite.channelTotal) <= 3000);
 
 const redBoostFrame = applyRegionMask(createFrame(0, 0, 0));
@@ -473,8 +563,23 @@ const boostedRedTotals = regionChannelTotals(boostedRed.leds);
 assert(boostedRedTotals[LED_REGION_TOP] > 0);
 assert.equal(boostedRedTotals[LED_REGION_SIDE], 0);
 assert.equal(boostedRedTotals[LED_REGION_BOTTOM], 0);
+assert.equal(boostedRedTotals[LED_REGION_CORNER], 0);
 assert(boostedRed.leds.every((led, index) => !isActiveLed(index) || (led.g === 0 && led.b === 0)));
 assert(boostedRed.leds.every((led, index) => isActiveLed(index) || (led.r === 0 && led.g === 0 && led.b === 0)));
+
+const cornerHeadroomFrame = applyRegionMask(
+  Array.from({ length: NUM_LEDS }, (_, index) => {
+    if (!isActiveLed(index)) {
+      return { r: 0, g: 0, b: 0 };
+    }
+
+    return ledRegion(index) === LED_REGION_CORNER ? { r: 0, g: 0, b: 0 } : { r: 255, g: 0, b: 0 };
+  }),
+);
+const cornerHeadroomBoosted = applyPowerLimit(cornerHeadroomFrame.leds, MAX_MILLIAMPS, true);
+const cornerHeadroomTotals = regionChannelTotals(cornerHeadroomBoosted.leds);
+assert(cornerHeadroomTotals[LED_REGION_TOP] > 0);
+assert(cornerHeadroomBoosted.leds.filter((_, index) => ledRegion(index) === LED_REGION_CORNER && isActiveLed(index)).every((led) => led.r === 0));
 
 const greenFrame = applyRegionMask(createFrame(0, 255, 0));
 const limitedGreen = applyPowerLimit(greenFrame.leds, MAX_MILLIAMPS, false);
@@ -496,7 +601,7 @@ assert(limitedCyan.channelTotal <= milliAmpsToChannelBudget(MAX_MILLIAMPS));
 
 const underBudgetFrame = applyRegionMask(createFrame(10, 20, 30));
 const underBudget = applyPowerLimit(underBudgetFrame.leds, estimateMilliAmps(underBudgetFrame.channelTotal), false);
-assert.deepEqual(underBudget.leds[0], { r: 9, g: 19, b: 29 });
+assert.deepEqual(underBudget.leds[0], { r: 10, g: 20, b: 30 });
 assert.deepEqual(underBudget.leds[1], { r: 0, g: 0, b: 0 });
 
 console.log('heat limiter math ok');

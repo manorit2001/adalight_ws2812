@@ -27,9 +27,12 @@ enum LedRegion : uint8_t {
   LED_REGION_BOTTOM = 0,
   LED_REGION_SIDE = 1,
   LED_REGION_TOP = 2,
+  LED_REGION_CORNER = 3,
   LED_REGION_INACTIVE = 255,
-  LED_REGION_COUNT = 3,
+  LED_REGION_COUNT = 4,
 };
+
+const uint8_t REGION_WEIGHTS[LED_REGION_COUNT] = {2, 7, 36, 1};
 
 // Baudrate, higher rate allows faster refresh rate and more LEDs (defined in /etc/boblight.conf)
 #define serialRate 500000
@@ -57,6 +60,11 @@ bool isTopLed(uint8_t ledIndex) {
   return ledIndex >= 32 && ledIndex <= 71;
 }
 
+bool isCornerLed(uint8_t ledIndex) {
+  return ledIndex == 12 || ledIndex == 15 || ledIndex == 31 || ledIndex == 32 ||
+         ledIndex == 71 || ledIndex == 72 || ledIndex == 88 || ledIndex == 89;
+}
+
 bool isActiveLed(uint8_t ledIndex) {
   if (isTopLed(ledIndex)) {
     return true;
@@ -82,6 +90,10 @@ bool isActiveLed(uint8_t ledIndex) {
 }
 
 uint8_t ledRegion(uint8_t ledIndex) {
+  if (isCornerLed(ledIndex)) {
+    return LED_REGION_CORNER;
+  }
+
   if (isTopLed(ledIndex)) {
     return LED_REGION_TOP;
   }
@@ -259,10 +271,83 @@ byte regionScaleFor(uint32_t requestedChannelTotal, uint32_t retainedChannelTota
   return (byte)scale;
 }
 
+void allocateWeightedRegionBudget(uint32_t requestedChannelTotals[], uint32_t retainedChannelTotals[], uint32_t budgetChannelTotal) {
+  bool settledRegions[LED_REGION_COUNT] = {false, false, false, false};
+  uint32_t remainingBudget = budgetChannelTotal;
+
+  while (remainingBudget > 0) {
+    uint64_t weightedDemand = 0;
+    bool hasDemand = false;
+
+    for (uint8_t region = 0; region < LED_REGION_COUNT; region++) {
+      if (settledRegions[region] || retainedChannelTotals[region] >= requestedChannelTotals[region]) {
+        continue;
+      }
+
+      weightedDemand += (uint64_t)requestedChannelTotals[region] * REGION_WEIGHTS[region];
+      hasDemand = true;
+    }
+
+    if (!hasDemand || weightedDemand == 0) {
+      return;
+    }
+
+    uint32_t shares[LED_REGION_COUNT] = {0, 0, 0, 0};
+    uint32_t allocatedThisPass = 0;
+    bool settledThisPass = false;
+
+    for (uint8_t region = 0; region < LED_REGION_COUNT; region++) {
+      if (settledRegions[region] || retainedChannelTotals[region] >= requestedChannelTotals[region]) {
+        continue;
+      }
+
+      uint64_t weightedRequest = (uint64_t)requestedChannelTotals[region] * REGION_WEIGHTS[region];
+      uint32_t share = (uint32_t)(((uint64_t)remainingBudget * weightedRequest) / weightedDemand);
+
+      if (share >= requestedChannelTotals[region]) {
+        retainedChannelTotals[region] = requestedChannelTotals[region];
+        remainingBudget -= requestedChannelTotals[region];
+        settledRegions[region] = true;
+        settledThisPass = true;
+      } else {
+        shares[region] = share;
+        allocatedThisPass += share;
+      }
+    }
+
+    if (settledThisPass) {
+      continue;
+    }
+
+    for (uint8_t region = 0; region < LED_REGION_COUNT; region++) {
+      retainedChannelTotals[region] += shares[region];
+    }
+
+    if (allocatedThisPass > remainingBudget) {
+      remainingBudget = 0;
+    } else {
+      remainingBudget -= allocatedThisPass;
+    }
+
+    const uint8_t remainderOrder[LED_REGION_COUNT] = {LED_REGION_TOP, LED_REGION_SIDE, LED_REGION_BOTTOM, LED_REGION_CORNER};
+
+    for (uint8_t orderIndex = 0; orderIndex < LED_REGION_COUNT && remainingBudget > 0; orderIndex++) {
+      uint8_t region = remainderOrder[orderIndex];
+
+      if (retainedChannelTotals[region] < requestedChannelTotals[region]) {
+        retainedChannelTotals[region]++;
+        remainingBudget--;
+      }
+    }
+
+    return;
+  }
+}
+
 uint32_t applyPowerLimit(uint16_t budgetMilliAmps, bool compensateRed) {
-  uint32_t requestedChannelTotals[LED_REGION_COUNT] = {0, 0, 0};
-  uint32_t retainedChannelTotals[LED_REGION_COUNT] = {0, 0, 0};
-  byte regionScales[LED_REGION_COUNT] = {0, 0, 0};
+  uint32_t requestedChannelTotals[LED_REGION_COUNT] = {0, 0, 0, 0};
+  uint32_t retainedChannelTotals[LED_REGION_COUNT] = {0, 0, 0, 0};
+  byte regionScales[LED_REGION_COUNT] = {0, 0, 0, 0};
   uint32_t budgetChannelTotal = milliAmpsToChannelBudget(budgetMilliAmps);
 
   for (uint8_t ledIndex = 0; ledIndex < NUM_LEDS; ledIndex++) {
@@ -277,11 +362,7 @@ uint32_t applyPowerLimit(uint16_t budgetMilliAmps, bool compensateRed) {
     requestedChannelTotals[region] += leds[ledIndex].b;
   }
 
-  retainedChannelTotals[LED_REGION_TOP] = min(requestedChannelTotals[LED_REGION_TOP], budgetChannelTotal);
-  budgetChannelTotal -= retainedChannelTotals[LED_REGION_TOP];
-  retainedChannelTotals[LED_REGION_SIDE] = min(requestedChannelTotals[LED_REGION_SIDE], budgetChannelTotal);
-  budgetChannelTotal -= retainedChannelTotals[LED_REGION_SIDE];
-  retainedChannelTotals[LED_REGION_BOTTOM] = min(requestedChannelTotals[LED_REGION_BOTTOM], budgetChannelTotal);
+  allocateWeightedRegionBudget(requestedChannelTotals, retainedChannelTotals, budgetChannelTotal);
 
   for (uint8_t region = 0; region < LED_REGION_COUNT; region++) {
     regionScales[region] = regionScaleFor(requestedChannelTotals[region], retainedChannelTotals[region]);
