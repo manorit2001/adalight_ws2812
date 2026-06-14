@@ -145,11 +145,11 @@ function isActiveLed(index) {
   }
 
   if (index <= 14) {
-    return ((index - 0) % 4) === 0;
+    return ((index - 0) % 2) === 0;
   }
 
   if (index >= 89 && index <= 103) {
-    return ((index - 89) % 4) === 0;
+    return ((index - 89) % 2) === 0;
   }
 
   return false;
@@ -426,10 +426,10 @@ assert.equal(estimateMilliAmps(255 * 3 * 104), 6240);
 assert.deepEqual(limitSaturatedColor(255, 0, 0), { r: 255, g: 0, b: 0 });
 assert.deepEqual(limitSaturatedColor(0, 255, 255), { r: 0, g: 255, b: 255 });
 
-assert.equal(activeLedCount(), 66);
+assert.equal(activeLedCount(), 74);
 assert.equal(regionActiveLedCount(LED_REGION_TOP), 38);
 assert.equal(regionActiveLedCount(LED_REGION_SIDE), 14);
-assert.equal(regionActiveLedCount(LED_REGION_BOTTOM), 6);
+assert.equal(regionActiveLedCount(LED_REGION_BOTTOM), 14);
 assert.equal(regionActiveLedCount(LED_REGION_CORNER), 8);
 assert.equal(
   regionActiveLedCount(LED_REGION_TOP) +
@@ -442,7 +442,7 @@ assert.equal(
 assert(isActiveLed(0));
 assert(isActiveLed(4));
 assert(!isActiveLed(1));
-assert(!isActiveLed(14));
+assert(isActiveLed(14));
 assert(isActiveLed(15));
 assert(!isActiveLed(16));
 assert(isActiveLed(17));
@@ -455,7 +455,7 @@ assert(isActiveLed(88));
 assert(isActiveLed(89));
 assert(!isActiveLed(90));
 assert(isActiveLed(93));
-assert(!isActiveLed(103));
+assert(isActiveLed(103));
 
 const maskedWhiteFrame = applyRegionMask(createFrame(255, 255, 255));
 assert.equal(maskedWhiteFrame.channelTotal, 255 * 3 * activeLedCount());
@@ -464,7 +464,7 @@ assert.deepEqual(maskedWhiteFrame.leds[1], { r: 0, g: 0, b: 0 });
 assert.deepEqual(maskedWhiteFrame.leds[32], { r: 255, g: 255, b: 255 });
 assert.deepEqual(maskedWhiteFrame.leds[73], { r: 0, g: 0, b: 0 });
 assert.deepEqual(maskedWhiteFrame.leds[89], { r: 255, g: 255, b: 255 });
-assert.deepEqual(maskedWhiteFrame.leds[103], { r: 0, g: 0, b: 0 });
+assert.deepEqual(maskedWhiteFrame.leds[103], { r: 255, g: 255, b: 255 });
 
 let heatBucket = 0;
 heatBucket = updateHeatBucket(heatBucket, 1600, 10000);
@@ -491,10 +491,10 @@ heatBucket = updateHeatBucket(heatBucket, 250, 1000);
 assert.equal(heatBucket, 9498);
 
 const standbyCurrent = estimateActiveColorMilliAmps(STANDBY_RED, STANDBY_GREEN, STANDBY_BLUE);
-assert.equal(standbyCurrent, 41);
+assert.equal(standbyCurrent, 46);
 heatBucket = HEAT_BUCKET_MAX;
 heatBucket = updateHeatBucket(heatBucket, standbyCurrent, 10000);
-assert.equal(heatBucket, 800);
+assert.equal(heatBucket, 900);
 heatBucket = updateHeatBucket(heatBucket, standbyCurrent, 2000);
 assert.equal(heatBucket, 0);
 
@@ -504,8 +504,8 @@ const fullWhiteScale = currentLimitedScale(fullWhiteCurrent, fullWhiteHeatScale)
 const fullWhiteBudget = effectiveBudgetMilliAmps(fullWhiteCurrent, fullWhiteHeatScale, fullWhiteScale);
 const fullWhiteLimited = applyPowerLimit(maskedWhiteFrame.leds, fullWhiteBudget, false);
 const fullWhiteTotals = regionChannelTotals(fullWhiteLimited.leds);
-assert.equal(fullWhiteCurrent, 3960);
-assert.equal(fullWhiteScale, 103);
+assert.equal(fullWhiteCurrent, 4440);
+assert.equal(fullWhiteScale, 91);
 assert.equal(fullWhiteBudget, MAX_MILLIAMPS);
 assert(fullWhiteTotals[LED_REGION_TOP] > fullWhiteTotals[LED_REGION_SIDE]);
 assert(fullWhiteTotals[LED_REGION_SIDE] > fullWhiteTotals[LED_REGION_BOTTOM]);

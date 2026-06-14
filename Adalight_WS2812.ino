@@ -79,11 +79,11 @@ bool isActiveLed(uint8_t ledIndex) {
   }
 
   if (ledIndex <= 14) {
-    return ((ledIndex - 0) % 4) == 0;
+    return ((ledIndex - 0) % 2) == 0;
   }
 
   if (ledIndex >= 89 && ledIndex <= 103) {
-    return ((ledIndex - 89) % 4) == 0;
+    return ((ledIndex - 89) % 2) == 0;
   }
 
   return false;
